@@ -3,6 +3,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { MongoClient, ObjectId } = require("mongodb");
+const jwt = require("jsonwebtoken");
 
 const app = express();
 app.use(cors());
@@ -34,13 +35,20 @@ dbConnect();
 const serviceCollection = client.db("HanksGarage").collection("services");
 app.get("/services", async (req, res) => {
   try {
+    const page = parseInt(req.query.page);
+    const size = parseInt(req.query.size);
+    console.log(page, size);
     const query = {};
     const cursor = serviceCollection.find(query);
-    const services = await cursor.toArray();
+    const services = await cursor
+      .skip(page * size)
+      .limit(size)
+      .toArray();
+    const count = await serviceCollection.estimatedDocumentCount();
     res.send({
       success: true,
       message: "Success",
-      data: services,
+      data: { count, services },
     });
   } catch (error) {
     res.send({
@@ -55,7 +63,6 @@ app.get("/services/:id", async (req, res) => {
     const { id } = req.params;
     const query = { _id: ObjectId(id) };
     const service = await serviceCollection.findOne(query);
-    // const services = await cursor.toArray();
     res.send({
       success: true,
       message: "Success",
@@ -86,11 +93,46 @@ app.post("/orders", async (req, res) => {
   }
 });
 
-app.get("/orders", async (req, res) => {
+function verifyJWT(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.send({
+      message: "Unauthorized Access",
+      status: 401,
+    });
+  }
+  const token = authHeader.split(" ")[1];
+  jwt.verify(token, process.env.USER_ACCESS_TOKEN, (error, decoded) => {
+    if (error) {
+      return res.send({
+        message: "Unauthorized Access",
+        status: 401,
+      });
+    }
+    req.decoded = decoded;
+    next();
+  });
+}
+
+app.get("/orders", verifyJWT, async (req, res) => {
+  const decoded = req.decoded;
+  if (decoded.email !== req.query.email) {
+    res.send({
+      status: 403,
+      message: "Unauthorized Email",
+    });
+  }
   try {
-    const query = {};
+    let query = {};
+    if (req.query.email) {
+      query = {
+        "customerDetails.email": req.query.email,
+      };
+    }
+
     const cursor = orderCollections.find(query);
     const orders = await cursor.toArray();
+
     res.send({
       success: true,
       message: "Success",
@@ -124,4 +166,12 @@ app.patch("/orders/:id", async (req, res) => {
   } catch (error) {
     success: false;
   }
+});
+
+app.post("/jwt", async (req, res) => {
+  const user = req.body;
+  const token = jwt.sign(user, process.env.USER_ACCESS_TOKEN, {
+    expiresIn: "1h",
+  });
+  res.send({ token });
 });
